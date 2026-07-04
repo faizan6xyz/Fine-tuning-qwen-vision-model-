@@ -16,69 +16,47 @@ from transformers import (
     TrainingArguments,
 )
 from qwen_vl_utils import process_vision_info
+
 model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
-TRAIN_FILE = "Data/train.jsonl"      # one JSON object per line, see format below
-IMAGE_ROOT = "Data/images"           # "image" field in each record is relative to this
+TRAIN_FILE = "Data/train.jsonl"
+IMAGE_ROOT = "Data/images/images"
 OUTPUT_DIR = "out/qwen25vl-3b-lora"
 MAX_PIXELS = 448 * 448
 IGNORE_INDEX = -100
-print(f"Loading {model_name}...")
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4"
-)
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    model_name,
-    quantization_config=bnb_config,
-    device_map="auto"
-)
-model.config.use_cache = False  # must be off for gradient checkpointing
-processor = AutoProcessor.from_pretrained(
-    model_name,
-    min_pixels=128 * 28 * 28,
-    max_pixels=256 * 28 * 28
-)
-if processor.tokenizer.pad_token is None:
-    processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
-print("Model loaded successfully.")
-model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-    target_modules=["q_proj", "v_proj"],
-)
-model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()
+from pathlib import Path
 class VLSFTDataset(Dataset):
     def __init__(self, jsonl_path: str, image_root: str):
-        self.image_root = image_root
+        self.image_root = Path(image_root)
         with open(jsonl_path, "r", encoding="utf-8") as f:
             self.records = [json.loads(line) for line in f if line.strip()]
+
     def __len__(self) -> int:
         return len(self.records)
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         rec = self.records[idx]
-        image_path = os.path.join(self.image_root, rec["image"])
+        image_filename = rec["image_name"].strip().replace("\\", "/")  # normalize any stray backslashes from the JSONL itself
+        image_path = self.image_root / image_filename
+
+        if not image_path.exists():
+            raise FileNotFoundError(
+                f"Image not found for record {idx}: '{image_path}' "
+                f"(image_root='{self.image_root}', image_name='{rec['image_name']}')"
+            )
+
         img = Image.open(image_path).convert("RGB").resize((448, 448))
-        return {
-            "image": img,
-            "prompt": rec["prompt"],
-            "response": rec["response"],
-        }
+        return {"image": img, "prompt": rec["prompt"], "response": rec["label"]}
 @dataclass
 class VLDataCollator:
     processor: Any
     max_pixels: int = MAX_PIXELS
+    
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         full_texts = []
         prompt_texts = []
         all_images = []
+        
         for ex in batch:
             messages = [
                 {"role": "user", "content": [
@@ -116,7 +94,47 @@ class VLDataCollator:
 
         model_inputs["labels"] = labels
         return model_inputs
+
+
 if __name__ == "__main__":
+    print(f"Loading {model_name}...")
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4"
+    )
+    
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model_name,
+        quantization_config=bnb_config,
+        device_map="auto"
+    )
+    model.config.use_cache = False
+    
+    processor = AutoProcessor.from_pretrained(
+        model_name,
+        min_pixels=128 * 28 * 28,
+        max_pixels=256 * 28 * 28
+    )
+    
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+
+    print("Model loaded successfully.")
+    
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=["q_proj", "v_proj"],
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
     torch.cuda.empty_cache()
     gc.collect()
     train_dataset = VLSFTDataset(TRAIN_FILE, IMAGE_ROOT)
@@ -124,7 +142,7 @@ if __name__ == "__main__":
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=16,   # effective batch size 16, keeps VRAM low
+        gradient_accumulation_steps=16,
         num_train_epochs=3,
         learning_rate=2e-4,
         bf16=True,
@@ -135,7 +153,7 @@ if __name__ == "__main__":
         save_total_limit=2,
         report_to="none",
         remove_unused_columns=False,
-        dataloader_num_workers=2,
+        dataloader_num_workers=0,
     )
     trainer = Trainer(
         model=model,
