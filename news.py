@@ -16,47 +16,39 @@ from transformers import (
     TrainingArguments,
 )
 from qwen_vl_utils import process_vision_info
-
 model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
 TRAIN_FILE = "Data/train.jsonl"
 IMAGE_ROOT = "Data/images/images"
 OUTPUT_DIR = "out/qwen25vl-3b-lora"
-MAX_PIXELS = 448 * 448
+MAX_PIXELS = 256 * 256
 IGNORE_INDEX = -100
-
 from pathlib import Path
 class VLSFTDataset(Dataset):
     def __init__(self, jsonl_path: str, image_root: str):
         self.image_root = Path(image_root)
         with open(jsonl_path, "r", encoding="utf-8") as f:
             self.records = [json.loads(line) for line in f if line.strip()]
-
     def __len__(self) -> int:
         return len(self.records)
-
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         rec = self.records[idx]
         image_filename = rec["image_name"].strip().replace("\\", "/")  # normalize any stray backslashes from the JSONL itself
         image_path = self.image_root / image_filename
-
         if not image_path.exists():
             raise FileNotFoundError(
                 f"Image not found for record {idx}: '{image_path}' "
                 f"(image_root='{self.image_root}', image_name='{rec['image_name']}')"
             )
-
         img = Image.open(image_path).convert("RGB").resize((448, 448))
         return {"image": img, "prompt": rec["prompt"], "response": rec["label"]}
 @dataclass
 class VLDataCollator:
     processor: Any
     max_pixels: int = MAX_PIXELS
-    
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         full_texts = []
         prompt_texts = []
         all_images = []
-        
         for ex in batch:
             messages = [
                 {"role": "user", "content": [
@@ -67,7 +59,6 @@ class VLDataCollator:
                     {"type": "text", "text": ex["response"]},
                 ]},
             ]
-
             full_text = self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False
             )
@@ -78,7 +69,6 @@ class VLDataCollator:
             full_texts.append(full_text)
             prompt_texts.append(prompt_text)
             all_images.extend(image_inputs)
-
         model_inputs = self.processor(
             text=full_texts,
             images=all_images,
@@ -91,11 +81,8 @@ class VLDataCollator:
             labels[i, :prompt_len] = IGNORE_INDEX
         pad_id = self.processor.tokenizer.pad_token_id
         labels[model_inputs["input_ids"] == pad_id] = IGNORE_INDEX
-
         model_inputs["labels"] = labels
         return model_inputs
-
-
 if __name__ == "__main__":
     print(f"Loading {model_name}...")
     bnb_config = BitsAndBytesConfig(
@@ -104,27 +91,21 @@ if __name__ == "__main__":
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4"
     )
-    
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_name,
         quantization_config=bnb_config,
         device_map="auto"
     )
     model.config.use_cache = False
-    
     processor = AutoProcessor.from_pretrained(
         model_name,
         min_pixels=128 * 28 * 28,
         max_pixels=256 * 28 * 28
     )
-    
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
     print("Model loaded successfully.")
-    
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    
     lora_config = LoraConfig(
         r=16,
         lora_alpha=32,
