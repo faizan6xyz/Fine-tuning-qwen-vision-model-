@@ -1,28 +1,3 @@
-'''
-Training Approaches
-1. Full Fine-Tuning
-    Updates all model parameters
-    Requires significant GPU memory (often needs multiple GPUs)
-    Best for substantial domain adaptation
-    Tools: Hugging Face Transformers, PyTorch
-
-2. Parameter-Efficient Fine-Tuning (PEFT)
-    LoRA (Low-Rank Adaptation): Most popular, updates small adapter matrices
-    QLoRA: LoRA with quantization for lower memory usage
-    Adapter Layers: Adds small trainable modules
-    Requires much less memory (can run on consumer GPUs)
-
-3. Instruction Tuning / SFT (Supervised Fine-Tuning)
-    Train on instruction-response pairs
-    Makes model follow your specific format/style
-    Essential for task-specific behavior
-
-4. RLHF (Reinforcement Learning from Human Feedback)
-    Advanced: requires reward models and PPO training
-    For aligning with human preferences
-    More complex setup
-'''
-
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
