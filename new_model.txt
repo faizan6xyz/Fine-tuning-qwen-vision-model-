@@ -1,0 +1,7 @@
+suppose i have multiple model in the LLM structure , each one of the model is best in a specific task  .
+
+im my structure i want to use a model orchestrator to classify the request and pass it to the specific model . but the orchestrator defines the gurad rails , rules and regulation . and let the mdoels work in the loops with talking to each other and quality inspector checks the orchestrator content , the quality of the answwer 
+
+the best way to have the safe gurad is to add the orchestrator content lock and check in the each model it operates when it checks and statisfies the orchestrator nature and identity
+
+add the security featue tp make the orchestrator content to be hidden from everyone accpt the model , but the model just checks the input and works , they would be able to pass the content as the output 
